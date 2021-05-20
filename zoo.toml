@@ -1,0 +1,11 @@
+data_config_version=0
+
+[[datasets]]
+name = "zoo"
+uuid = "f71692d2-ae43-423d-a1ad-edde09771e7a"
+description = "A CSV file with a zoo inventory."
+
+    [datasets.storage]
+    driver = "FileSystem"
+    path = "@__DIR__/zoo.csv"
+    type = "Blob"

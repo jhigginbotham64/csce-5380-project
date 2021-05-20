@@ -1,0 +1,13 @@
+Month,Animal,Min_age,Max_age,Count
+January,elephant,3,5,3
+February,lion,1,4,7
+March,zebra,2,2,14
+April,penguin,0,3,28
+May,gorilla,2,20,5
+June,panda,2,2,1
+July,giraffe,4,5,2
+August,camel,1,4,9
+September,rhino,10,24,10
+October,tiger,2,6,2
+November,sloth,10,12,3
+December,chameleon,1,1,1
