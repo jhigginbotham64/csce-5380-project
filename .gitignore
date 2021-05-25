@@ -1,6 +1,7 @@
 # Project
 chime_home/
 julia*/
+*.pdf
 
 # Julia
 
