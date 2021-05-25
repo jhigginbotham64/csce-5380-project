@@ -8,4 +8,4 @@ echo -e "\n" | ./julia-1.6.1/bin/julia --project=@. -e "using Pkg; Pkg.update();
 killall -9 jupyter-notebook
 
 # install chime_home dataset
-wget -c https://archive.org/download/chime-home/chime_home.tar.gz -O | tar xz
+wget -c https://archive.org/download/chime-home/chime_home.tar.gz -O - | tar xz
