@@ -6,6 +6,8 @@ echo -e "\n" | ./julia-1.6.1/bin/julia --project=@. -e "using Pkg; Pkg.update();
 
 # kill notebook, not reachable by default so we need to start properly later anyway
 killall -9 jupyter-notebook
+# if the killall command is not available, you may need to install it:
+# sudo apt install psmisc
 
 # install chime_home dataset
 wget -c https://archive.org/download/chime-home/chime_home.tar.gz -O - | tar xz
