@@ -1,3 +1,5 @@
+# run.sh
+
 # runs miniconda jupyter notebook on default port.
 # usually this is 8888, but if you're connecting
 # remotely then edit this command to make sure it
