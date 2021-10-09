@@ -2,6 +2,7 @@
 chime_home/
 julia*/
 *.pdf
+*.env.*
 
 # Julia
 
