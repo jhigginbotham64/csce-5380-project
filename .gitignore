@@ -2,7 +2,8 @@
 chime_home/
 julia*/
 *.pdf
-*.env.*
+*.env
+*.tar.gz
 
 # Julia
 
