@@ -111,23 +111,29 @@ begin
 end
 
 # ╔═╡ b0bd58fb-3758-4909-a337-020ffb1752e4
-"""
+md"""
 	next tasks:
 	- need to code:
 		- custom MBK (clear)
 		- custom MFCC (clear)
 		- multi-class encoding (clear)
+		- background noise aware training (clear if understood as adaptation,
+			i.e. augmentation also occurs during prediction)
+		- define data loaders (clear)
 		- DNN baseline using raw audio data (clear, altho departs from paper)
 		- MFCC-DNN (clear)
 		- MBK-DNN (clear)
-		- aDAE -> paper
-		- get features from trained aDAE -> Flux docs and paper
+		- aDAE (train on MBK, reconstruct middle frame from 7)
+		- get features from trained aDAE (custom training and 
+			testing loop, maybe need to freeze certain parameters)
 		- aDAE-DNN (clear)
 		- class precision (clear)
 		- class recall (clear)
 		- class F1 (clear)
 		- confusion matrix (clear)
 		- EER (clear)
+	- investigate:
+		- exploring techniques from other papers
 """
 
 # ╔═╡ Cell order:
