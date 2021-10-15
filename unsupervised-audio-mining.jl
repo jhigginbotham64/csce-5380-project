@@ -115,11 +115,14 @@ md"""
 	using a voting system, which can provide start and end times for individual
 	events via overlapping windows without the need to manually extract them or even
 	identify them individually, which would otherwise be the hardest problems to
-	solve in this domain.
+	solve in this domain. besides memory consumption, which can be solved by primarily
+	preserving analytics data and only preserving audio chunks up to a certain
+	threshold per class. bada-bing bada-boom, a self-hosted audio surveillance app.
 	...i'll need to polish that and maybe add some visualizations if i want to use
 	it in my paper, but like...i don't have to use it in my paper, i can just use it
 	for myself. however, it does justify focusing on the multiclass problem over and
-	above the single-class problem.
+	above the single-class problem, i.e. properly distinguishing audio tagging from
+	AED.
 """
 
 # ╔═╡ bb8d065b-1495-4390-a782-94571ba40275
