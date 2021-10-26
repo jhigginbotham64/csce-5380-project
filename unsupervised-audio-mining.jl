@@ -13,17 +13,18 @@ begin
 	using Flux
 	using OhMyREPL
 	using DotEnv
+	using MFCC
 end
 
 # ╔═╡ b0bd58fb-3758-4909-a337-020ffb1752e4
 md"""
 	next tasks:
 	- need to code:
-		- custom MBK (clear)
-		- custom MFCC (clear)
-		- multi-class encoding (clear)
+		- MBK (done)
+		- MFCC (done)
+		- multi-class encoding (done)
 		- background noise aware training (clear if understood as adaptation,
-		i.e. augmentation also occurs during prediction)
+		i.e. augmentation also occurs during prediction, i.e. not during data loading)
 		- define data loaders (clear)
 		- DNN baseline using raw audio data (clear, altho departs from paper)
 		- MFCC-DNN (clear)
@@ -153,72 +154,159 @@ function print_data_file(s)
     end
 end
 
+# ╔═╡ b71a1abd-0b85-471e-9347-60638916b99b
+function getdfval(df, key)
+   val = String(df[df.key .== key, :].val[1])
+   if key in ["segmentname", "chunkname", 
+				   "annotation_a1", "annotation_a2",
+				   "annotation_a3", "majorityvote"] return val
+   elseif key in ["chunknumber", "framestart"] return parse(Int, val)
+   elseif key in ["session_a1", "session_a2", 
+				   "session_a3"] return parse(Float64, val)
+   end
+end
+
+# ╔═╡ 52518e6f-d42b-45bf-a5be-b02e899c88e5
+function preprocess_chunk(chunkname)
+	c = CSV.read(
+	   IOBuffer(open(String, chime_home["chunks"][chunkname * ".csv"])), 
+	   DataFrame; header=["key","val"])
+	c = Dict(key => getdfval(c, key) for key in c.key)
+	c["c"] = 'c' in c["majorityvote"] ? 1 : 0
+	c["m"] = 'm' in c["majorityvote"] ? 1 : 0
+	c["f"] = 'f' in c["majorityvote"] ? 1 : 0
+	c["v"] = 'v' in c["majorityvote"] ? 1 : 0
+	c["p"] = 'p' in c["majorityvote"] ? 1 : 0
+	c["b"] = 'b' in c["majorityvote"] ? 1 : 0
+	c["o"] = 'o' in c["majorityvote"] ? 1 : 0
+	data, freq, _ = wavread(
+		joinpath(
+			project.datasets["chime_home"].storage["path"], "chunks", 
+			chunkname * ".16kHz.wav"))
+	c["data"] = data
+	c["freq"] = freq
+	# wintime, steptime, and numcep values are all taken from the paper
+	datamfcc = mfcc(
+		reshape(data, 64000), freq; wintime=0.02, steptime=0.01, numcep=24)
+	c["mfcc"] = znorm(datamfcc[1])
+	c["mbk"] = znorm(datamfcc[2][:, 1:40]) # 40 (nummbk) is also from the paper
+	return c
+end
+
+# ╔═╡ e5fe10f1-b9fd-4802-a0da-911c065d2967
+function getchunkdf(df)
+	newdf = DataFrame(
+		segmentname = String[],
+		chunknumber = Int[],
+		framestart = Int[],
+		chunkname = String[],
+		annotation_a1 = String[],
+		session_a1 = AbstractFloat[],
+		annotation_a2 = String[],
+		session_a2 = AbstractFloat[],
+		annotation_a3 = String[],
+		session_a3 = AbstractFloat[],
+		majorityvote = String[],
+		c = Int[],
+		m = Int[],
+		f = Int[],
+		v = Int[],
+		p = Int[],
+		b = Int[],
+		o = Int[],
+		data = Matrix{AbstractFloat}[],
+		freq = AbstractFloat[],
+		mfcc = Matrix{AbstractFloat}[],
+		mbk = Matrix{AbstractFloat}[]
+	)
+
+	for chunkname in df.chunkname
+		push!(newdf, preprocess_chunk(chunkname))
+	end
+
+	return newdf
+end
+
 # ╔═╡ b21ff8cc-d39b-48dd-b6af-ced0cca5608a
 begin
-	chunks_dir = chime_home["chunks"];
-	
-	function getdfval(df, key)
-	   val = String(df[df.key .== key, :].val[1])
-	   if key in ["segmentname", "chunkname", 
-					   "annotation_a1", "annotation_a2",
-					   "annotation_a3", "majorityvote"] return val
-	   elseif key in ["chunknumber", "framestart"] return parse(Int, val)
-	   elseif key in ["session_a1", "session_a2", 
-					   "session_a3"] return parse(Float64, val)
-	   end
-	end
-	
-	function preprocess_chunk(chunkname)
-		c = CSV.read(
-		   IOBuffer(open(String, chunks_dir[chunkname * ".csv"])), 
-		   DataFrame; header=["key","val"])
-		c = Dict(key => getdfval(c, key) for key in c.key)
-		# because right now i don't know the first thing about what this stuff means
-		wav1, wav2, wav3, wav4 = wavread(
-			joinpath(
-				project.datasets["chime_home"].storage["path"], "chunks", 
-				chunkname * ".16kHz.wav"))
-		c["wav1"] = wav1
-		c["wav2"] = wav2
-		c["wav3"] = wav3
-		c["wav4"] = wav4[1] # vector is only length 1, so unpack it here
-		return c
-	end
-	
-	function getchunkdf(df)
-		newdf = DataFrame(
-			segmentname = String[],
-			chunknumber = Int[],
-			framestart = Int[],
-			annotation_a1 = String[],
-			session_a1 = AbstractFloat[],
-			annotation_a2 = String[],
-			session_a2 = AbstractFloat[],
-			annotation_a3 = String[],
-			session_a3 = AbstractFloat[],
-			majorityvote = String[],
-			chunkname = String[],
-			wav1 = Matrix{AbstractFloat}[],
-			wav2 = AbstractFloat[],
-			wav3 = Int[],
-			wav4 = WAVChunk[],
-		)
-
-		for chunkname in df.chunkname
-			push!(newdf, preprocess_chunk(chunkname))
-		end
-		
-		return newdf
-	end
-	
 	chunk_headers=["id", "chunkname"];
-	eval_chunks = getchunkdf(CSV.read(
-		IOBuffer(open(String, chime_home["evaluation_chunks_refined.csv"])), 
-		DataFrame; header=chunk_headers));
+	# eval_chunks = getchunkdf(CSV.read(
+	# 	IOBuffer(open(String, chime_home["evaluation_chunks_refined.csv"])), 
+	# 	DataFrame; header=chunk_headers));
 	dev_chunks = getchunkdf(CSV.read(
 		IOBuffer(open(String, chime_home["development_chunks_refined.csv"])), 
 		DataFrame; header=chunk_headers));
 end
+
+# ╔═╡ e8d57d33-a224-4150-9308-69455db18465
+md"""
+	ok here's the DNN code, all the other dnn's are the same
+	except that they use binary_crossentropy instead of mse
+	(this is the mfcc dnn):
+
+	###build model by keras
+	model = Sequential()
+
+	#model.add(Flatten(input_shape=(agg_num,fea_dim)))
+	model.add(Dropout(0.1,input_shape=(agg_num*fea_dim+fea_dim,)))
+	#model.add(Dropout(0.1,input_shape=(agg_num*fea_dim,)))
+
+	model.add(Dense(1000,input_dim=agg_num*fea_dim))
+	model.add(Activation('relu'))
+	model.add(Dropout(0.2))
+
+	model.add(Dense(500))
+	model.add(Activation('relu'))
+	model.add(Dropout(0.2))
+
+	model.add(Dense(n_out))
+	model.add(Activation('sigmoid'))
+
+	model.summary()
+
+	#model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+	#model.compile(loss='mse', optimizer='adam') ### sth wrong here
+	sgd = SGD(lr=0.005, decay=0, momentum=0.9)
+	#model.compile(loss='binary_crossentropy', optimizer=sgd, metrics=['accuracy'])
+	model.compile(loss='mse', optimizer=sgd)
+
+	dump_fd=cfg.scrap_fd+'/Md/dnn_mfc24_fold1_fr91_bcCOST_keras_weights.{epoch:02d}-{val_loss:.2f}.hdf5'
+
+	eachmodel=ModelCheckpoint(dump_fd,monitor='val_loss',verbose=0,save_best_only=False,save_weights_only=False,mode='auto')      
+
+	model.fit(tr_X, tr_y, batch_size=100, nb_epoch=51,
+				  verbose=1, validation_data=(te_X, te_y), callbacks=[eachmodel]) #, callbacks=[best_model])
+	#score = model.evaluate(te_X, te_y, show_accuracy=True, verbose=0)
+	#print('Test score:', score[0])
+	#print('Test accuracy:', score[1])
+
+	...and here's the aDAE:
+
+	###build model by keras
+	input_audio=Input(shape=(agg_num*fea_dim,))
+	encoded = Dropout(0.1)(input_audio)
+	encoded = Dense(500,activation='relu')(encoded)
+	encoded = Dense(50,activation='relu')(encoded)
+
+	decoded = Dense(500,activation='relu')(encoded)
+	#decoded = Dense(fea_dim*agg_num,activation='linear')(decoded)
+	decoded = Dense(fea_dim,activation='linear')(decoded)
+
+	autoencoder=Model(input=input_audio,output=decoded)
+
+	autoencoder.summary()
+
+	sgd = SGD(lr=0.01, decay=0, momentum=0.9)
+	autoencoder.compile(optimizer=sgd,loss='mse')
+
+	dump_fd=cfg.scrap_fd+'/Md/dae_keras_Relu50_1outFr_7inFr_dp0.1_weights.{epoch:02d}-{val_loss:.2f}.hdf5'
+
+	eachmodel=ModelCheckpoint(dump_fd,monitor='val_loss',verbose=0,save_best_only=False,save_weights_only=False,mode='auto') 
+
+	autoencoder.fit(tr_X,tr_y,nb_epoch=100,batch_size=100,shuffle=True,validation_data=(te_X,te_y), callbacks=[eachmodel])
+
+
+"""
 
 # ╔═╡ Cell order:
 # ╠═b0bd58fb-3758-4909-a337-020ffb1752e4
@@ -227,4 +315,8 @@ end
 # ╠═1895ece2-fb9d-4237-af5f-10543c0a28d9
 # ╠═6ea126c1-f0cf-458d-bd0a-4b13c9b18a01
 # ╠═a41923c9-e6f5-4c5a-880d-f065d20588ff
+# ╠═b71a1abd-0b85-471e-9347-60638916b99b
+# ╠═52518e6f-d42b-45bf-a5be-b02e899c88e5
+# ╠═e5fe10f1-b9fd-4802-a0da-911c065d2967
 # ╠═b21ff8cc-d39b-48dd-b6af-ced0cca5608a
+# ╠═e8d57d33-a224-4150-9308-69455db18465
