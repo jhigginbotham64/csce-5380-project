@@ -14,6 +14,8 @@ begin
 	using OhMyREPL
 	using DotEnv
 	using MFCC
+	using CUDA
+	using Flux
 end
 
 # ╔═╡ b0bd58fb-3758-4909-a337-020ffb1752e4
@@ -310,6 +312,7 @@ md"""
 PLUTO_PROJECT_TOML_CONTENTS = """
 [deps]
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 DataSets = "c9661210-8a83-48f0-b833-72e62abce419"
 DotEnv = "4dc1fcf4-5e3b-5448-94ab-0c38ec0385c1"
@@ -320,6 +323,7 @@ WAV = "8149f6b0-98f6-5db9-b78f-408fbbb8ef88"
 
 [compat]
 CSV = "~0.9.9"
+CUDA = "~2.6.3"
 DataFrames = "~1.2.2"
 DataSets = "~0.2.5"
 DotEnv = "~0.3.1"
