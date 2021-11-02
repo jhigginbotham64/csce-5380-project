@@ -15,7 +15,6 @@ begin
 	using DotEnv
 	using MFCC
 	using CUDA
-	using Flux
 end
 
 # ╔═╡ b0bd58fb-3758-4909-a337-020ffb1752e4
@@ -157,7 +156,7 @@ function print_data_file(s)
 end
 
 # ╔═╡ b71a1abd-0b85-471e-9347-60638916b99b
-function getdfval(df, key)
+function get_df_val(df, key)
    val = String(df[df.key .== key, :].val[1])
    if key in ["segmentname", "chunkname", 
 				   "annotation_a1", "annotation_a2",
@@ -173,7 +172,7 @@ function preprocess_chunk(chunkname)
 	c = CSV.read(
 	   IOBuffer(open(String, chime_home["chunks"][chunkname * ".csv"])), 
 	   DataFrame; header=["key","val"])
-	c = Dict(key => getdfval(c, key) for key in c.key)
+	c = Dict(key => get_df_val(c, key) for key in c.key)
 	c["c"] = 'c' in c["majorityvote"] ? 1 : 0
 	c["m"] = 'm' in c["majorityvote"] ? 1 : 0
 	c["f"] = 'f' in c["majorityvote"] ? 1 : 0
@@ -181,6 +180,7 @@ function preprocess_chunk(chunkname)
 	c["p"] = 'p' in c["majorityvote"] ? 1 : 0
 	c["b"] = 'b' in c["majorityvote"] ? 1 : 0
 	c["o"] = 'o' in c["majorityvote"] ? 1 : 0
+	c["labels"] = [c["c"], c["m"], c["f"], c["v"], c["p"], c["b"], c["o"]]
 	data, freq, _ = wavread(
 		joinpath(
 			project.datasets["chime_home"].storage["path"], "chunks", 
@@ -196,7 +196,7 @@ function preprocess_chunk(chunkname)
 end
 
 # ╔═╡ e5fe10f1-b9fd-4802-a0da-911c065d2967
-function getchunkdf(df)
+function get_chunk_df(df)
 	newdf = DataFrame(
 		segmentname = String[],
 		chunknumber = Int[],
@@ -216,6 +216,7 @@ function getchunkdf(df)
 		p = Int[],
 		b = Int[],
 		o = Int[],
+		labels = Vector{Int}[],
 		data = Matrix{AbstractFloat}[],
 		freq = AbstractFloat[],
 		mfcc = Matrix{AbstractFloat}[],
@@ -229,15 +230,85 @@ function getchunkdf(df)
 	return newdf
 end
 
+# ╔═╡ 127dcb77-63f3-46fd-ad7b-7a186f37b81a
+# get chime home csv dataframe
+function get_ch_csv_df(fname; header=["id", "chunkname"])
+	return CSV.read(
+		IOBuffer(open(String, chime_home[fname])), 
+		DataFrame; header=header)
+end
+
+# ╔═╡ 6fb6eebf-a490-4117-afb0-290f465e210c
+get_chunk_set(fname) = get_chunk_df(get_ch_csv_df(fname))
+
 # ╔═╡ b21ff8cc-d39b-48dd-b6af-ced0cca5608a
 begin
-	chunk_headers=["id", "chunkname"];
-	# eval_chunks = getchunkdf(CSV.read(
-	# 	IOBuffer(open(String, chime_home["evaluation_chunks_refined.csv"])), 
-	# 	DataFrame; header=chunk_headers));
-	dev_chunks = getchunkdf(CSV.read(
-		IOBuffer(open(String, chime_home["development_chunks_refined.csv"])), 
-		DataFrame; header=chunk_headers));
+	eval_chunks = get_chunk_set("evaluation_chunks_refined.csv");
+	dev_chunks = get_chunk_set("development_chunks_refined.csv");
+end
+
+# ╔═╡ d4dbe98f-7919-4d73-b4c9-2524359e7292
+function chunk_set_loader(df; feature, batchsize=100)
+	return Flux.Data.DataLoader((data=df[:, feature], 
+		labels=df[:, "labels"]), batchsize=batchsize, shuffle=true)
+end
+
+# ╔═╡ 6a5c11a3-a8d4-4491-9637-8472cc076861
+begin
+	η = 0.005 # learning rate
+	ρ = 0.9 # momentum
+	seed = 0xDEADBEEF # random seed
+	epochs = 100 # training iterations
+	feature = "mfcc" # which column to use as input
+
+	# set device for later
+	if CUDA.has_cuda()
+		device = gpu
+	else
+		device = cpu
+	end
+end
+
+# ╔═╡ 9591981b-63ea-4edf-9cef-2760963ff3ed
+function DNN(in, device; 
+	dropout1 = 0.1,
+	dropout2 = 0.2,
+	dense1 = 1000,
+	dense2 = 500
+)
+	return Chain(
+		vec, # flatten input
+		Dropout(dropout1),
+		Dense(in, dense1, relu),
+		Dropout(dropout2),
+		Dense(dense1, dense2, relu),
+		Dropout(dropout2),
+		Dense(dense2, 7, sigmoid), # 7 = number of labels
+	) |> device
+end
+
+# ╔═╡ 50b95ecc-3596-443e-a60f-7c50b80fb115
+DNN(399 * 24, device)(eval_chunks[:, "mfcc"][1])
+
+# ╔═╡ 2fb3f97c-d832-4e07-80c6-5bc7b59f91b5
+eval_chunks[:, "labels"]
+
+# ╔═╡ d698686b-ee9e-4a95-91f4-f03e9c59df26
+begin
+	dnn = DNN(399 * 24, device)
+	training = chunk_set_loader(dev_chunks; feature=feature) 
+	testing = chunk_set_loader(eval_chunks; feature=feature)
+	dp = params(dnn)
+	
+	for i in 1:epochs
+		# clearly i don't yet understand how flux works compared to tensorflow
+		Flux.train!(
+			Flux.Losses.binarycrossentropy,
+			dp,
+			training,
+			Flux.Momentum(η, ρ)
+		)
+	end
 end
 
 # ╔═╡ e8d57d33-a224-4150-9308-69455db18465
@@ -1084,7 +1155,15 @@ uuid = "3f19e933-33d8-53b3-aaab-bd5110c3b7a0"
 # ╠═b71a1abd-0b85-471e-9347-60638916b99b
 # ╠═52518e6f-d42b-45bf-a5be-b02e899c88e5
 # ╠═e5fe10f1-b9fd-4802-a0da-911c065d2967
+# ╠═127dcb77-63f3-46fd-ad7b-7a186f37b81a
+# ╠═6fb6eebf-a490-4117-afb0-290f465e210c
 # ╠═b21ff8cc-d39b-48dd-b6af-ced0cca5608a
+# ╠═d4dbe98f-7919-4d73-b4c9-2524359e7292
+# ╠═6a5c11a3-a8d4-4491-9637-8472cc076861
+# ╠═9591981b-63ea-4edf-9cef-2760963ff3ed
+# ╠═50b95ecc-3596-443e-a60f-7c50b80fb115
+# ╠═2fb3f97c-d832-4e07-80c6-5bc7b59f91b5
+# ╠═d698686b-ee9e-4a95-91f4-f03e9c59df26
 # ╠═e8d57d33-a224-4150-9308-69455db18465
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
