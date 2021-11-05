@@ -1,5 +1,5 @@
 ### A Pluto.jl notebook ###
-# v0.17.0
+# v0.16.4
 
 using Markdown
 using InteractiveUtils
@@ -11,10 +11,12 @@ begin
 	using DataFrames
 	using DataSets
 	using Flux
+	using Flux: @epochs
 	using OhMyREPL
 	using DotEnv
 	using MFCC
 	using CUDA
+	using Random
 end
 
 # ╔═╡ b0bd58fb-3758-4909-a337-020ffb1752e4
@@ -241,36 +243,21 @@ end
 # ╔═╡ 6fb6eebf-a490-4117-afb0-290f465e210c
 get_chunk_set(fname) = get_chunk_df(get_ch_csv_df(fname))
 
-# ╔═╡ b21ff8cc-d39b-48dd-b6af-ced0cca5608a
-begin
-	eval_chunks = get_chunk_set("evaluation_chunks_refined.csv");
-	dev_chunks = get_chunk_set("development_chunks_refined.csv");
-end
-
 # ╔═╡ d4dbe98f-7919-4d73-b4c9-2524359e7292
-function chunk_set_loader(df; feature, batchsize=100)
+function chunk_set_loader_batched(fname; feature, batchsize=100)
+	df = get_chunk_set(fname)
 	return Flux.Data.DataLoader((data=df[:, feature], 
 		labels=df[:, "labels"]), batchsize=batchsize, shuffle=true)
 end
 
-# ╔═╡ 6a5c11a3-a8d4-4491-9637-8472cc076861
-begin
-	η = 0.005 # learning rate
-	ρ = 0.9 # momentum
-	seed = 0xDEADBEEF # random seed
-	epochs = 100 # training iterations
-	feature = "mfcc" # which column to use as input
-
-	# set device for later
-	if CUDA.has_cuda()
-		device = gpu
-	else
-		device = cpu
-	end
+# ╔═╡ 71b3dfa1-afe7-4ce8-8724-b552267ac6aa
+function chunk_set_loader_unbatched(fname; feature)
+	df = get_chunk_set(fname)
+	return zip(df[:, feature], df[:, "labels"])
 end
 
 # ╔═╡ 9591981b-63ea-4edf-9cef-2760963ff3ed
-function DNN(in, device; 
+function DNN(in; 
 	dropout1 = 0.1,
 	dropout2 = 0.2,
 	dense1 = 1000,
@@ -278,37 +265,70 @@ function DNN(in, device;
 )
 	return Chain(
 		vec, # flatten input
-		Dropout(dropout1),
+		# Dropout(dropout1),
 		Dense(in, dense1, relu),
 		Dropout(dropout2),
 		Dense(dense1, dense2, relu),
 		Dropout(dropout2),
 		Dense(dense2, 7, sigmoid), # 7 = number of labels
-	) |> device
+	)
 end
 
-# ╔═╡ 50b95ecc-3596-443e-a60f-7c50b80fb115
-DNN(399 * 24, device)(eval_chunks[:, "mfcc"][1])
+# ╔═╡ 6a5c11a3-a8d4-4491-9637-8472cc076861
+begin
+	# parameters
+	η = 0.005 # learning rate
+	ρ = 0.9 # momentum
+	seed = 0xDEADBEEF # random seed
+	seed > 0 && Random.seed!(seed)
+	nepochs = 1 # training iterations
+	feature = "mfcc" # which column to use as input
+	cuda = false # use gpu if available
+	loss_func = Flux.Losses.binarycrossentropy
 
-# ╔═╡ 2fb3f97c-d832-4e07-80c6-5bc7b59f91b5
-eval_chunks[:, "labels"]
+	# set device for later
+	if cuda && CUDA.has_cuda()
+		device = gpu
+		# make sure we actually use the gpu
+		CUDA.allowscalar(false)
+	else
+		device = cpu
+	end
+end
+
+# ╔═╡ e3135a53-14e0-46f6-8a5a-3f0450dc4014
+begin
+	# data loaders
+	# trn = chunk_set_loader_batched(
+	# 	"development_chunks_refined.csv"; feature=feature) 
+	# tst = chunk_set_loader_batched(
+	# 	"evaluation_chunks_refined.csv"; feature=feature)
+	trn = chunk_set_loader_unbatched(
+		"development_chunks_refined.csv"; feature=feature) 
+	tst = chunk_set_loader_unbatched(
+		"evaluation_chunks_refined.csv"; feature=feature)
+end
 
 # ╔═╡ d698686b-ee9e-4a95-91f4-f03e9c59df26
 begin
-	dnn = DNN(399 * 24, device)
-	training = chunk_set_loader(dev_chunks; feature=feature) 
-	testing = chunk_set_loader(eval_chunks; feature=feature)
+	dnn = DNN(399 * 24) |> device
 	dp = params(dnn)
 	
-	for i in 1:epochs
-		# clearly i don't yet understand how flux works compared to tensorflow
-		Flux.train!(
-			Flux.Losses.binarycrossentropy,
-			dp,
-			training,
-			Flux.Momentum(η, ρ)
-		)
+	function loss(x, y)
+		loss_func(dnn(x |> device), y |> device)
+		# println("exploring: ", string(typeof(d)))
+		# for d_ in d
+		# 	println(string(typeof(d_)))
+		# 	println(string(length(d_)))
+		# end
 	end
+	
+	# function cb()
+	# 	println("tst loss: ", string(loss(first(tst)...)))
+	# end
+	
+	# @epochs nepochs Flux.train!(loss, dp, trn, Flux.Momentum(η, ρ); cb=cb)
+	@epochs nepochs Flux.train!(loss, dp, trn, Flux.Momentum(η, ρ))
 end
 
 # ╔═╡ e8d57d33-a224-4150-9308-69455db18465
@@ -390,6 +410,7 @@ DotEnv = "4dc1fcf4-5e3b-5448-94ab-0c38ec0385c1"
 Flux = "587475ba-b771-5e3f-ad9e-33799f191a9c"
 MFCC = "ca7b5df7-6146-5dcc-89ec-36256279a339"
 OhMyREPL = "5fb14364-9ced-5910-84b2-373655c76a03"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 WAV = "8149f6b0-98f6-5db9-b78f-408fbbb8ef88"
 
 [compat]
@@ -1157,12 +1178,11 @@ uuid = "3f19e933-33d8-53b3-aaab-bd5110c3b7a0"
 # ╠═e5fe10f1-b9fd-4802-a0da-911c065d2967
 # ╠═127dcb77-63f3-46fd-ad7b-7a186f37b81a
 # ╠═6fb6eebf-a490-4117-afb0-290f465e210c
-# ╠═b21ff8cc-d39b-48dd-b6af-ced0cca5608a
 # ╠═d4dbe98f-7919-4d73-b4c9-2524359e7292
-# ╠═6a5c11a3-a8d4-4491-9637-8472cc076861
+# ╠═71b3dfa1-afe7-4ce8-8724-b552267ac6aa
 # ╠═9591981b-63ea-4edf-9cef-2760963ff3ed
-# ╠═50b95ecc-3596-443e-a60f-7c50b80fb115
-# ╠═2fb3f97c-d832-4e07-80c6-5bc7b59f91b5
+# ╠═6a5c11a3-a8d4-4491-9637-8472cc076861
+# ╠═e3135a53-14e0-46f6-8a5a-3f0450dc4014
 # ╠═d698686b-ee9e-4a95-91f4-f03e9c59df26
 # ╠═e8d57d33-a224-4150-9308-69455db18465
 # ╟─00000000-0000-0000-0000-000000000001
