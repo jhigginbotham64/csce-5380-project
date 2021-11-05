@@ -1,5 +1,5 @@
 ### A Pluto.jl notebook ###
-# v0.16.4
+# v0.17.1
 
 using Markdown
 using InteractiveUtils
@@ -274,30 +274,9 @@ function DNN(in;
 	)
 end
 
-# ╔═╡ 6a5c11a3-a8d4-4491-9637-8472cc076861
-begin
-	# parameters
-	η = 0.005 # learning rate
-	ρ = 0.9 # momentum
-	seed = 0xDEADBEEF # random seed
-	seed > 0 && Random.seed!(seed)
-	nepochs = 1 # training iterations
-	feature = "mfcc" # which column to use as input
-	cuda = false # use gpu if available
-	loss_func = Flux.Losses.binarycrossentropy
-
-	# set device for later
-	if cuda && CUDA.has_cuda()
-		device = gpu
-		# make sure we actually use the gpu
-		CUDA.allowscalar(false)
-	else
-		device = cpu
-	end
-end
-
 # ╔═╡ e3135a53-14e0-46f6-8a5a-3f0450dc4014
 begin
+	feature = "mfcc" # which column to use as input
 	# data loaders
 	# trn = chunk_set_loader_batched(
 	# 	"development_chunks_refined.csv"; feature=feature) 
@@ -307,6 +286,27 @@ begin
 		"development_chunks_refined.csv"; feature=feature) 
 	tst = chunk_set_loader_unbatched(
 		"evaluation_chunks_refined.csv"; feature=feature)
+end
+
+# ╔═╡ 6a5c11a3-a8d4-4491-9637-8472cc076861
+begin
+	# parameters
+	η = 0.005 # learning rate
+	ρ = 0.9 # momentum
+	seed = 0xDEADBEEF # random seed
+	seed > 0 && Random.seed!(seed)
+	nepochs = 1 # training iterations
+	cuda = true # use gpu if available
+	loss_func = Flux.Losses.binarycrossentropy
+
+	# set device for later
+	if cuda && CUDA.has_cuda()
+		device = gpu
+		# whether we want to allow avoiding the gpu or not
+		CUDA.allowscalar(false)
+	else
+		device = cpu
+	end
 end
 
 # ╔═╡ d698686b-ee9e-4a95-91f4-f03e9c59df26
@@ -1181,8 +1181,8 @@ uuid = "3f19e933-33d8-53b3-aaab-bd5110c3b7a0"
 # ╠═d4dbe98f-7919-4d73-b4c9-2524359e7292
 # ╠═71b3dfa1-afe7-4ce8-8724-b552267ac6aa
 # ╠═9591981b-63ea-4edf-9cef-2760963ff3ed
-# ╠═6a5c11a3-a8d4-4491-9637-8472cc076861
 # ╠═e3135a53-14e0-46f6-8a5a-3f0450dc4014
+# ╠═6a5c11a3-a8d4-4491-9637-8472cc076861
 # ╠═d698686b-ee9e-4a95-91f4-f03e9c59df26
 # ╠═e8d57d33-a224-4150-9308-69455db18465
 # ╟─00000000-0000-0000-0000-000000000001
