@@ -250,60 +250,22 @@ end
 get_chunk_set(fname) = get_chunk_df(get_ch_csv_df(fname))
 
 # ╔═╡ d4dbe98f-7919-4d73-b4c9-2524359e7292
-function chunk_set_loader_batched(fname; feature, batchsize=100)
-	df = get_chunk_set(fname)
-	return Flux.Data.DataLoader((data=df[:, feature], 
-		labels=df[:, "labels"]), batchsize=batchsize, shuffle=true)
+function chunk_set_loader_batched(df; feature, batchsize=32)
+	return Flux.Data.DataLoader((data=[vec(f) for f in df[:, feature]], 
+		labels=[vec(l) for l in df[:, "labels"]]), batchsize=batchsize, shuffle=true)
 end
 
 # ╔═╡ 71b3dfa1-afe7-4ce8-8724-b552267ac6aa
-function chunk_set_loader_unbatched(fname; feature)
-	df = get_chunk_set(fname)
-	return zip(df[:, feature], df[:, "labels"])
-end
-
-# ╔═╡ 9591981b-63ea-4edf-9cef-2760963ff3ed
-function DNN(in; 
-	dropout1 = 0.1,
-	dropout2 = 0.2,
-	dense1 = 1000,
-	dense2 = 500
-)
-	return Chain(
-		vec, # flatten input
-		# Dropout(dropout1),
-		Dense(in, dense1, relu),
-		Dropout(dropout2),
-		Dense(dense1, dense2, relu),
-		Dropout(dropout2),
-		Dense(dense2, 7, sigmoid), # 7 = number of labels
-	)
-end
-
-# ╔═╡ e3135a53-14e0-46f6-8a5a-3f0450dc4014
-begin
-	feature = "mfcc" # which column to use as input
-	# data loaders
-	# trn = chunk_set_loader_batched(
-	# 	"development_chunks_refined.csv"; feature=feature) 
-	# tst = chunk_set_loader_batched(
-	# 	"evaluation_chunks_refined.csv"; feature=feature)
-	trn = chunk_set_loader_unbatched(
-		"development_chunks_refined.csv"; feature=feature) 
-	tst = chunk_set_loader_unbatched(
-		"evaluation_chunks_refined.csv"; feature=feature)
+function chunk_set_loader_unbatched(df; feature)
+	return zip([vec(f) for f in df[:, feature]], [vec(l) for l in df[:, "labels"]])
 end
 
 # ╔═╡ 6a5c11a3-a8d4-4491-9637-8472cc076861
 begin
-	# parameters
-	η = 0.005 # learning rate
-	ρ = 0.9 # momentum
 	seed = 0xDEADBEEF # random seed
 	seed > 0 && Random.seed!(seed)
-	nepochs = 1 # training iterations
+	nepochs = 100 # training iterations
 	cuda = true # use gpu if available
-	loss_func = Flux.Losses.binarycrossentropy
 
 	# set device for later
 	if cuda && CUDA.has_cuda()
@@ -313,97 +275,187 @@ begin
 	else
 		device = cpu
 	end
+
+	# unbatched device loss, i.e. calculate loss on device
+	# where the outputs and labels are not batched
+	udl(lss, mdl) = (x, y) -> lss(mdl(x |> device), y |> device)
+	
+	# batched device loss, based on the docs:
+	# https://fluxml.ai/Flux.jl/stable/performance/#Evaluate-batches-as-Matrices-of-features
+	function bdl(lss, mdl)
+		function (d)
+			xs = reduce(hcat, d.data) |> device
+			ys = reduce(hcat, d.labels) |> device
+			yhats = mdl(xs) |> device
+			return sum(lss.(yhats, ys))
+		end
+	end
+	
+	# opt = () -> Flux.Optimise.Momentum(0.005, 0.9)
+	opt = () -> Flux.Optimise.ADAM()
+	
+	throttle_sec = 15
+	throttled = (f) -> Flux.throttle(f, throttle_sec)
+
+	cb(lss) = throttled(
+			function ()
+				println("tst loss: ", string(lss), " ", string(lss()))
+			end
+		)
+
+	tst_loss_unbatched = (tst, lss) -> () -> sum([lss(d...) for d in tst])
+	tst_loss_batched = (tst, lss) -> () -> sum([lss(d) for d in tst])
+end
+
+# ╔═╡ 9591981b-63ea-4edf-9cef-2760963ff3ed
+function DNN(in; 
+	dropout1 = 0.1, # default from paper
+	dropout2 = 0.2,
+	dense1 = 1000,
+	dense2 = 500
+)
+	return Chain(
+		Dropout(dropout1),
+		Dense(in, dense1, relu),
+		Dropout(dropout2),
+		Dense(dense1, dense2, relu),
+		Dropout(dropout2),
+		Dense(dense2, 7, sigmoid), # 7 = number of labels
+	)
+end
+
+# ╔═╡ c9e50684-8e04-4481-a2fe-8612c1c6e8fd
+function aDAE(in; # asynchronous denoising autoencoder
+	frames = 7, # defaults from paper
+	dropout = 0.1,
+	dense = 500,
+	bottleneck = 50
+)
+	return Chain(
+		# encoder
+		Dropout(dropout),
+		Dense(in, dense, relu),
+		Dense(dense, bottleneck, relu),
+		# decoder
+		Dense(bottleneck, dense, relu),
+		Dense(dense, Int(in / frames)) # default activation is identity/linear
+	)
+end
+
+# ╔═╡ 64856590-dd0e-4708-96b2-e776bd46796a
+# takes a zipped set of features and labels
+# and creates a new set where the labels are
+# the middle frames of the features, which
+# of course assumes an odd number of frames
+function async_frame_set(d, frames = 7)
+	v = vec(first(first(d)))
+	lv = length(v)
+	fl = Int(lv / frames)
+	BEGIN = Int((frames - 1) / 2) * fl + 1
+	END = (BEGIN - 1) + fl
+	return [(vec(x), vec(x)[BEGIN:END]) for (x, y) in d]
+end
+
+# ╔═╡ 783150a9-2578-4eee-b277-0a317464a299
+begin
+	fname_dev = "development_chunks_refined.csv"
+	fname_eval = "evaluation_chunks_refined.csv"
+	
+	dev_chunks = get_chunk_set(fname_dev)
+	eval_chunks = get_chunk_set(fname_eval)
+end
+
+# ╔═╡ e3135a53-14e0-46f6-8a5a-3f0450dc4014
+begin
+	RAW_FTR = "data"
+	MFCC_FTR = "mfcc"
+	MBK_FTR = "mbk"
+	
+	# trn_raw = chunk_set_loader_unbatched(dev_chunks; feature=RAW_FTR) 
+	# tst_raw = chunk_set_loader_unbatched(eval_chunks; feature=RAW_FTR)
+	# trn_mbk = chunk_set_loader_unbatched(dev_chunks; feature=MBK_FTR) 
+	# tst_mbk = chunk_set_loader_unbatched(eval_chunks; feature=MBK_FTR)
+	# trn_mfcc = chunk_set_loader_unbatched(dev_chunks; feature=MFCC_FTR) 
+	# tst_mfcc = chunk_set_loader_unbatched(eval_chunks; feature=MFCC_FTR)
+	trn_mfcc = chunk_set_loader_batched(dev_chunks; feature=MFCC_FTR) 
+	tst_mfcc = chunk_set_loader_batched(eval_chunks; feature=MFCC_FTR)
+end
+
+# ╔═╡ 20f2b436-d56a-4a99-96d7-0c55973e20be
+# begin
+# 	raw_dnn = DNN(64000) |> device
+# 	raw_dnn_p = params(raw_dnn)
+# 	bce_dnn_raw_loss = bdl(Flux.Losses.binarycrossentropy, raw_dnn)
+
+# 	# smoke-test training DNN
+# 	for i in 1:nepochs
+# 		println("RAW DNN epoch $i")
+# 		Flux.train!(bce_dnn_raw_loss, raw_dnn_p, trn_raw, opt(); 
+# 			cb=cb(tst_loss_batched(tst_raw, bce_dnn_raw_loss)))
+# 	end
+# end
+
+# ╔═╡ 07beeaa0-7514-4138-9cec-909868edfe7d
+begin
+	mfcc_dnn = DNN(399*24) |> device
+	mfcc_dnn_p = params(mfcc_dnn)
+	bce_dnn_mfcc_loss = bdl(Flux.Losses.binarycrossentropy, mfcc_dnn)
+	
+	for i in 1:nepochs
+		println("MFCC DNN epoch $i")
+		Flux.train!(bce_dnn_mfcc_loss, mfcc_dnn_p, trn_mfcc, opt(); 
+			cb=cb(tst_loss_batched(tst_mfcc, bce_dnn_mfcc_loss)))
+	end
 end
 
 # ╔═╡ d698686b-ee9e-4a95-91f4-f03e9c59df26
-begin
-	dnn = DNN(399 * 24) |> device
-	dp = params(dnn)
+# begin
+# 	mbk_dnn = DNN(399 * 40) |> device
+# 	mbk_dnn_p = params(mbk_dnn)
+# 	bce_dnn_mbk_loss = bdl(Flux.Losses.binarycrossentropy, mbk_dnn)
+
+# 	for i in 1:nepochs
+# 		println("MBK DNN epoch $i")
+# 		Flux.train!(bce_dnn_mbk_loss, mbk_dnn_p, trn_mbk, opt(); 
+# 			cb=cb(tst_loss_batched(tst_mbk, bce_dnn_mbk_loss)))
+# 	end
+# end
+
+# ╔═╡ 45e998a5-d75f-4349-91f8-5fc1550913ce
+# begin
+# 	adae = aDAE(399 * 40) |> device
+# 	adae_p = params(adae)
+
+# 	adae_loss = udl(Flux.Losses.mse, adae)
+# 	adae_tst_loss = () -> sum([adae_loss(d...) for d in async_frame_set(tst_mbk)])
 	
-	function loss(x, y)
-		loss_func(dnn(x |> device), y |> device)
-		# println("exploring: ", string(typeof(d)))
-		# for d_ in d
-		# 	println(string(typeof(d_)))
-		# 	println(string(length(d_)))
-		# end
-	end
-	
-	# function cb()
-	# 	println("tst loss: ", string(loss(first(tst)...)))
-	# end
-	
-	# @epochs nepochs Flux.train!(loss, dp, trn, Flux.Momentum(η, ρ); cb=cb)
-	@epochs nepochs Flux.train!(loss, dp, trn, Flux.Momentum(η, ρ))
-end
+# 	for i in 1:nepochs
+# 		println("aDAE epoch $i")
+# 		Flux.train!(
+# 			adae_loss, adae_p, async_frame_set(trn_mbk),
+# 			opt(), cb=cb(adae_tst_loss)
+# 		)
+# 	end
+# end
 
-# ╔═╡ e8d57d33-a224-4150-9308-69455db18465
-md"""
-	ok here's the DNN code, all the other dnn's are the same
-	except that they use binary_crossentropy instead of mse
-	(this is the mfcc dnn):
+# ╔═╡ 5a46e054-de91-4fad-933d-e0459bce40e0
+# begin
+# 	adae_dnn = DNN(50) |> device
+# 	adae_dnn_p = params(adae_dnn)
 
-	###build model by keras
-	model = Sequential()
+# 	function adae_dnn_loss(x, y)
+# 		yhat = x |> device |> adae[1:4] |> adae_dnn
+# 		return Flux.Losses.binarycrossentropy(yhat, y |> device)
+# 	end
 
-	#model.add(Flatten(input_shape=(agg_num,fea_dim)))
-	model.add(Dropout(0.1,input_shape=(agg_num*fea_dim+fea_dim,)))
-	#model.add(Dropout(0.1,input_shape=(agg_num*fea_dim,)))
-
-	model.add(Dense(1000,input_dim=agg_num*fea_dim))
-	model.add(Activation('relu'))
-	model.add(Dropout(0.2))
-
-	model.add(Dense(500))
-	model.add(Activation('relu'))
-	model.add(Dropout(0.2))
-
-	model.add(Dense(n_out))
-	model.add(Activation('sigmoid'))
-
-	model.summary()
-
-	#model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
-	#model.compile(loss='mse', optimizer='adam') ### sth wrong here
-	sgd = SGD(lr=0.005, decay=0, momentum=0.9)
-	#model.compile(loss='binary_crossentropy', optimizer=sgd, metrics=['accuracy'])
-	model.compile(loss='mse', optimizer=sgd)
-
-	dump_fd=cfg.scrap_fd+'/Md/dnn_mfc24_fold1_fr91_bcCOST_keras_weights.{epoch:02d}-{val_loss:.2f}.hdf5'
-
-	eachmodel=ModelCheckpoint(dump_fd,monitor='val_loss',verbose=0,save_best_only=False,save_weights_only=False,mode='auto')      
-
-	model.fit(tr_X, tr_y, batch_size=100, nb_epoch=51,
-				  verbose=1, validation_data=(te_X, te_y), callbacks=[eachmodel]) #, callbacks=[best_model])
-	#score = model.evaluate(te_X, te_y, show_accuracy=True, verbose=0)
-	#print('Test score:', score[0])
-	#print('Test accuracy:', score[1])
-
-	...and here's the aDAE:
-
-	###build model by keras
-	input_audio=Input(shape=(agg_num*fea_dim,))
-	encoded = Dropout(0.1)(input_audio)
-	encoded = Dense(500,activation='relu')(encoded)
-	encoded = Dense(50,activation='relu')(encoded)
-
-	decoded = Dense(500,activation='relu')(encoded)
-	#decoded = Dense(fea_dim*agg_num,activation='linear')(decoded)
-	decoded = Dense(fea_dim,activation='linear')(decoded)
-
-	autoencoder=Model(input=input_audio,output=decoded)
-
-	autoencoder.summary()
-
-	sgd = SGD(lr=0.01, decay=0, momentum=0.9)
-	autoencoder.compile(optimizer=sgd,loss='mse')
-
-	dump_fd=cfg.scrap_fd+'/Md/dae_keras_Relu50_1outFr_7inFr_dp0.1_weights.{epoch:02d}-{val_loss:.2f}.hdf5'
-
-	eachmodel=ModelCheckpoint(dump_fd,monitor='val_loss',verbose=0,save_best_only=False,save_weights_only=False,mode='auto') 
-
-	autoencoder.fit(tr_X,tr_y,nb_epoch=100,batch_size=100,shuffle=True,validation_data=(te_X,te_y), callbacks=[eachmodel])
-"""
+# 	for i in 1:nepochs
+# 		println("aDAE_DNN epoch $i")
+# 		Flux.train!(
+# 			adae_dnn_loss, adae_dnn_p, trn_mbk, opt(),
+# 			cb=cb(tst_loss(tst_mbk, adae_dnn_loss))
+# 		)
+# 	end
+# end
 
 # ╔═╡ Cell order:
 # ╠═b0bd58fb-3758-4909-a337-020ffb1752e4
@@ -420,8 +472,14 @@ md"""
 # ╠═6fb6eebf-a490-4117-afb0-290f465e210c
 # ╠═d4dbe98f-7919-4d73-b4c9-2524359e7292
 # ╠═71b3dfa1-afe7-4ce8-8724-b552267ac6aa
-# ╠═9591981b-63ea-4edf-9cef-2760963ff3ed
-# ╠═e3135a53-14e0-46f6-8a5a-3f0450dc4014
 # ╠═6a5c11a3-a8d4-4491-9637-8472cc076861
+# ╠═9591981b-63ea-4edf-9cef-2760963ff3ed
+# ╠═c9e50684-8e04-4481-a2fe-8612c1c6e8fd
+# ╠═64856590-dd0e-4708-96b2-e776bd46796a
+# ╠═783150a9-2578-4eee-b277-0a317464a299
+# ╠═e3135a53-14e0-46f6-8a5a-3f0450dc4014
+# ╠═20f2b436-d56a-4a99-96d7-0c55973e20be
+# ╠═07beeaa0-7514-4138-9cec-909868edfe7d
 # ╠═d698686b-ee9e-4a95-91f4-f03e9c59df26
-# ╠═e8d57d33-a224-4150-9308-69455db18465
+# ╠═45e998a5-d75f-4349-91f8-5fc1550913ce
+# ╠═5a46e054-de91-4fad-933d-e0459bce40e0
