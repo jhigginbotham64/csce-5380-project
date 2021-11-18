@@ -17,7 +17,6 @@ begin
 	using DataFrames
 	using DataSets
 	using Flux
-	using Flux: @epochs
 	using OhMyREPL
 	using DotEnv
 	using MFCC
@@ -336,7 +335,7 @@ begin
 	adae_dnn_p = params(adae_dnn)
 
 	function adae_dnn_loss(x, y)
-		yhat = x |> device |> adae[1:4] |> adae_dnn
+		yhat = x |> device |> adae[1:3] |> adae_dnn
 		return Flux.Losses.binarycrossentropy(yhat, y |> device)
 	end
 
@@ -344,7 +343,7 @@ begin
 		println("aDAE_DNN epoch $i")
 		Flux.train!(
 			adae_dnn_loss, adae_dnn_p, trn_mbk, opt(),
-			cb=cb(tst_loss(tst_mbk, adae_dnn_loss))
+			cb=cb(tst_loss_unbatched(tst_mbk, adae_dnn_loss))
 		)
 	end
 end
