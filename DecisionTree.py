@@ -2,15 +2,17 @@ from scipy.stats import mode
 import numpy as np
 
 class SimpleCondition:
-  func = None
   outcomes = None
+  attr = None
+  cutpoint = None  
 
-  def __init__(self, func, outcomes):
-    self.func = func
+  def __init__(self, attr, cutpoint, outcomes):
+    self.attr = attr
+    self.cutpoint = cutpoint
     self.outcomes = outcomes
   
   def __call__(self, x):
-    return self.func(x)
+    return x[self.attr] <= self.cutpoint
   
   def __lt__(self, other):
     # needs to be implemented so that i can sort
@@ -33,6 +35,9 @@ class SimpleDecisionTreeNode:
   def add_child(self, outcome, N):
     self.children[outcome] = N
   
+  def set_children(self, children):
+    self.children = children
+  
   def outcomes(self):
     return self.children.keys()
   
@@ -51,14 +56,14 @@ class SimpleDecisionTree:
     self.root = SimpleDecisionTree.gentree(X, y)
     return self
 
-  @staticmethod
-  def gini(X, y):
+  @classmethod
+  def gini(cls, X, y):
     return 1 - sum([(
         np.count_nonzero(y == c) / len(y)) ** 2 
         for c in set(y)])
 
-  @staticmethod
-  def gini_ind_cont(m, X, y):
+  @classmethod
+  def gini_ind_cont(cls, m, X, y):
     le_inds = X <= m
     g_inds = X > m
     g1 = np.count_nonzero(le_inds) * SimpleDecisionTree.gini(X[le_inds], y[le_inds])
@@ -66,8 +71,8 @@ class SimpleDecisionTree:
     return (g1 + g2) / len(X)
 
 
-  @staticmethod
-  def attribute_selection(X, y):
+  @classmethod
+  def attribute_selection(cls, X, y):
     conds = []
     for col in range(X.shape[-1]):
       # https://stackoverflow.com/questions/2828059/sorting-arrays-in-numpy-by-column
@@ -81,11 +86,11 @@ class SimpleDecisionTree:
       for m in mids:
         gini_inds.append(SimpleDecisionTree.gini_ind_cont(m, sortedX, sortedy))
       g, m = sorted(list(zip(gini_inds, mids)))[0]
-      conds.append((g, SimpleCondition(func=lambda x: x[col] <= m, outcomes=[True, False])))
+      conds.append((g, SimpleCondition(attr=col, cutpoint=m, outcomes=[True, False])))
     return sorted(conds)[0][1]
       
-  @staticmethod
-  def gentree(X, y):
+  @classmethod
+  def gentree(cls, X, y):
     n = SimpleDecisionTreeNode()
     majority = mode(y).mode[0]
     if len(set(y)) == 1:
@@ -94,14 +99,18 @@ class SimpleDecisionTree:
     # NOT dealing with discrete-valued attributes here
     cond = SimpleDecisionTree.attribute_selection(X, y)
     n.condition = cond
+    children = {}
     for j in cond.outcomes:
       inds = [cond(x) == j for x in X]
       Xj = X[inds]
-      if len(Xj) == 0:
-        n.add_child(j, SimpleDecisionTreeNode(label=majority))
+      if len(Xj) == 0 or len(Xj) == len(X):
+        children[j] = SimpleDecisionTreeNode(label=majority)
+        # TODO figure out why the add_child approach didn't work
+        # n.add_child(j, SimpleDecisionTreeNode(label=majority))
       else:
-        n2 = SimpleDecisionTree.gentree(Xj, y[inds])
-        n.add_child(j, n2)
+        children[j] = SimpleDecisionTree.gentree(Xj, y[inds])
+        # n.add_child(j, SimpleDecisionTree.gentree(Xj, y[inds]))
+    n.set_children(children)
     return n
 
   def traverse(self, x):
