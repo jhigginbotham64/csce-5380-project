@@ -43,6 +43,7 @@ class SimpleNaiveBayes:
       probs.append((
         p*(np.prod([self.class_attr_gaussians[k][i](a) for i, a in enumerate(x)])), k
       ))
+    # TODO figure out why not reversing always gives the same results rather than inverting them
     return sorted(probs, reverse=True)[0][1]
 
 if __name__ == "__main__":
