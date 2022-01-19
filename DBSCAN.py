@@ -1,7 +1,7 @@
 class SimpleDBSCAN:
   eps = None
 
-  def __init__(self, n_clusters = None):
+  def __init__(self, eps = None):
     self.eps = eps
   
   def fit_predict(self, X):
@@ -9,4 +9,4 @@ class SimpleDBSCAN:
 
 if __name__ == "__main__":
   from sklearn.datasets import load_iris
-  print(SimpleDBSCAN()(eps=0.2).fit_predict(load_iris().data))
+  print(SimpleDBSCAN(eps=0.2).fit_predict(load_iris().data))
