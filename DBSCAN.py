@@ -11,9 +11,8 @@ class SimpleDBSCANNode:
   eps_nhood = None
   cluster = None
 
-  def __init__(self, pos, eps_nhood = None, cluster = None, core = False, visited = False):
+  def __init__(self, pos, eps_nhood = None, cluster = None, visited = False):
     self.pos = pos
-    self.core = core
     self.eps_nhood = eps_nhood
     self.visited = visited
     self.cluster = cluster
