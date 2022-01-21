@@ -40,8 +40,8 @@ class SimpleDBSCAN:
       if not p.visited:
         p.visited = True
         if len(p.eps_nhood) >= self.min_samples:
-          p.cluster = self.n_clusters
           self.n_clusters += 1
+          p.cluster = self.n_clusters
           n = [pp for pp in p.eps_nhood] # want same elements, but not same array
           for pp in n:
             if not pp.visited:
@@ -51,8 +51,7 @@ class SimpleDBSCAN:
             if pp.cluster is None:
               pp.cluster = p.cluster
         else:
-          # p.cluster is None when "noise" is denoted
-          pass
+          p.cluster = 0 # noise
     
     return np.array([p.cluster for p in self.pts])
 
